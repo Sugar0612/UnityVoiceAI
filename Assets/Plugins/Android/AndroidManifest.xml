@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Unity 构建 Android 时会把这份清单作为 Main Manifest 合并进最终 APK。
+  需要的权限：
+  - INTERNET      ：访问 DeepSeek API
+  - RECORD_AUDIO  ：系统语音识别（SpeechRecognizer）录音需要
+  <queries>       ：Android 11+ 包可见性，让系统能发现语音识别服务与 TTS 引擎
+
+  ⚠ 重要：Unity 6.0.3 在自定义 Main Manifest 下可能不会自动注入启动 Activity，
+  这里显式声明 UnityPlayerActivity + MAIN/LAUNCHER，保证 APK 有桌面图标和启动入口。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
+    <application>
+        <activity
+            android:name="com.unity3d.player.UnityPlayerActivity"
+            android:exported="true"
+            android:theme="@style/UnityThemeSelector"
+            android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|smallestScreenSize|fontScale|layoutDirection|density">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <meta-data android:name="unityplayer.UnityActivity" android:value="true" />
+        </activity>
+    </application>
+</manifest>
