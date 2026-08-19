@@ -152,17 +152,23 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::VoiceAI.VoiceAIController
   deepSeek:
-    apiKey: sk-31914f81b35a4714b8c7608db3c70160
+    apiKey: sk-024a0383146442b5888e98cb74124c99
     apiUrl: https://api.deepseek.com/chat/completions
     model: deepseek-chat
     maxTokens: 1024
     temperature: 0.7
     systemPrompt: "\u4F60\u662F\u4E00\u4E2A\u53CB\u597D\u7684\u4E2D\u6587\u8BED\u97F3\u52A9\u624B\uFF0C\u56DE\u7B54\u8BF7\u7B80\u6D01\u3001\u53E3\u8BED\u5316\uFF0C\u63A7\u5236\u5728100\u5B57\u4EE5\u5185\u3002"
+  stt:
+    apiUrl: https://api.siliconflow.cn/v1/audio/transcriptions
+    apiKey: sk-cbzpduuvxacafqcdqbvmvucyafskgxluqfmvazjuhdmatweu
+    model: FunAudioLLM/SenseVoiceSmall
+    language: zh
   statusText: {fileID: 291421252}
   recognizedText: {fileID: 1893011840}
   replyText: {fileID: 1514330933}
   holdToTalk: 0
-  sttLanguage: zh-CN
+  silenceAutoStopSeconds: 2.5
+  maxRecordSeconds: 25
 --- !u!114 &39108946
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -704,7 +710,7 @@ MonoBehaviour:
     m_FontStyle: 0
     m_BestFit: 0
     m_MinSize: 10
-    m_MaxSize: 40
+    m_MaxSize: 48
     m_Alignment: 4
     m_AlignByGeometry: 0
     m_RichText: 1

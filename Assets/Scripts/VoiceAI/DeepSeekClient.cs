@@ -99,7 +99,7 @@ namespace VoiceAI
             byte[] body = Encoding.UTF8.GetBytes(json);
 
             using var uwr = new UnityWebRequest(settings.apiUrl.Trim(), "POST");
-            uwr.timeout = 60;
+            uwr.timeout = 30;
             uwr.uploadHandler = new UploadHandlerRaw(body);
             uwr.downloadHandler = new DownloadHandlerBuffer();
             uwr.SetRequestHeader("Content-Type", "application/json; charset=utf-8");
