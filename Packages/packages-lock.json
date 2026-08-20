@@ -1,18 +1,5 @@
 {
   "dependencies": {
-    "com.sug.essentials": {
-      "version": "https://github.com/Sugar0612/Essentials.git?path=Assets/Essentials#1.1.0",
-      "depth": 0,
-      "source": "git",
-      "dependencies": {},
-      "hash": "9defeb52a6fa54463df8a5fdf744f38f8762022f"
-    },
-    "com.sug.essentials-installer": {
-      "version": "file:E:/ParasiticWasps/Essentials Installer",
-      "depth": 0,
-      "source": "local",
-      "dependencies": {}
-    },
     "com.unity.addressables": {
       "version": "4.0.1",
       "depth": 0,

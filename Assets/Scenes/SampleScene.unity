@@ -163,6 +163,14 @@ MonoBehaviour:
     apiKey: sk-cbzpduuvxacafqcdqbvmvucyafskgxluqfmvazjuhdmatweu
     model: FunAudioLLM/SenseVoiceSmall
     language: zh
+  useCloudTts: 1
+  tts:
+    apiUrl: https://api.minimax.chat/v1/t2a_v2
+    apiKey: sk-api-WJkj46IN-2LzqS8Qaw2m4KJBoGayaukFDHnIT8vUlgmHg8XeNbCb6Wwe95BtbGQ0IUpWDlLx0Ia2P6HpJU6yyIIlJGb9NXjN2YpLtR4Y9hvFwJodlE3iQas
+    voiceId: TSY_voice01
+    model: speech-02-hd
+    speed: 1
+    sampleRate: 24000
   statusText: {fileID: 291421252}
   recognizedText: {fileID: 1893011840}
   replyText: {fileID: 1514330933}

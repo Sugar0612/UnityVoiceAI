@@ -30,6 +30,11 @@ namespace VoiceAI
         [Header("语音识别(STT) 配置")]
         [SerializeField] private SttSettings stt = new SttSettings();
 
+        [Header("语音合成(TTS) 配置")]
+        [Tooltip("true=用云端TTS(MiniMax，可自定义音色)；false=用系统TTS")]
+        [SerializeField] private bool useCloudTts = true;
+        [SerializeField] private TtsSettings tts = new TtsSettings();
+
         [Header("UI 引用（可选）")]
         [Tooltip("状态提示文字，如 正在录音/思考中/播放中")]
         [SerializeField] private Text statusText;
@@ -68,10 +73,19 @@ namespace VoiceAI
         private float[] _levelBuf;
         private int _silentCount;
         private bool _processing;
+        private AudioSource _audioSource;
 
         private void Awake()
         {
-            Debug.Log("[VoiceAI] Awake，holdToTalk=" + holdToTalk + "，sttModel=" + stt.model);
+            Debug.Log("[VoiceAI] Awake，holdToTalk=" + holdToTalk + "，sttModel=" + stt.model + "，useCloudTts=" + useCloudTts);
+
+            // 云端 TTS 播放需要 AudioSource（自动挂载，无需手动配置）
+            _audioSource = GetComponent<AudioSource>();
+            if (_audioSource == null)
+            {
+                _audioSource = gameObject.AddComponent<AudioSource>();
+                _audioSource.playOnAwake = false;
+            }
 #if UNITY_ANDROID && !UNITY_EDITOR
             _tts = new AndroidTextToSpeech();
             _tts.OnReady += () => Debug.Log("[VoiceAI] TTS 已就绪");
@@ -262,7 +276,7 @@ namespace VoiceAI
                 Microphone.End(_recDevice);
         }
 
-        /// <summary>录音监控：更新秒数、静音自动停止、最长时长限制</summary>
+        /// <summary> 录音监控：更新秒数、静音自动停止、最长时长限制 </summary>
         private IEnumerator RecordingMonitor()
         {
             var wait = new WaitForSeconds(0.25f);
@@ -358,6 +372,32 @@ namespace VoiceAI
 
         private void Speak(string text)
         {
+            // 方案一（默认）：云端 TTS（MiniMax 声音复刻，可自定义音色）
+            if (useCloudTts)
+            {
+                if (_audioSource == null)
+                {
+                    RaiseError("AudioSource 不可用");
+                    SetState(VoiceAIState.Idle);
+                    return;
+                }
+                SetText(statusText, "正在合成语音...");
+                StartCoroutine(CloudTtsClient.Synthesize(tts, text, clip =>
+                {
+                    _audioSource.clip = clip;
+                    _audioSource.Play();
+                    SetText(statusText, "正在朗读回复...");
+                    StartCoroutine(WaitPlaybackEnd());
+                }, err =>
+                {
+                    SetText(replyText, "⚠ " + err);
+                    RaiseError(err);
+                    SetState(VoiceAIState.Idle);
+                }));
+                return;
+            }
+
+            // 方案二（备用）：Android 系统 TTS
 #if UNITY_ANDROID && !UNITY_EDITOR
             if (_tts != null && _tts.IsReady)
             {
@@ -378,9 +418,17 @@ namespace VoiceAI
                 SetState(VoiceAIState.Idle);
             }
 #else
-            Debug.Log("[VoiceAI] (编辑器模拟) AI 回复: " + text);
+            Debug.LogWarning("[VoiceAI] 编辑器模式下系统TTS不可用，请改用云端TTS（useCloudTts=true）");
             SetState(VoiceAIState.Idle);
 #endif
+        }
+
+        /// <summary>等待云端 TTS 音频播放完毕，然后复位状态</summary>
+        private IEnumerator WaitPlaybackEnd()
+        {
+            while (_audioSource != null && _audioSource.isPlaying)
+                yield return null;
+            SetState(VoiceAIState.Idle);
         }
 
         private IEnumerator SafetyResetAfterSpeaking(string reply)
