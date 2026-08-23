@@ -14,7 +14,7 @@
 | ① | 录音 | Unity Microphone 类（系统级） | 本地 | 免费 |
 | ② | 语音转文字 STT | 硅基流动（SenseVoice） | `POST api.siliconflow.cn/v1/audio/transcriptions` | 免费额度，按量极低 |
 | ③ | 对话 | DeepSeek | `POST api.deepseek.com/chat/completions` | 极低，按 token |
-| ④ | 文字转语音 TTS | MiniMax（支持声音复刻） | `POST api.minimaxi.com/v1/t2a_v2` | 免费额度，按字符 |
+| ④ | 文字转语音 TTS | **系统 TTS（默认，免费）**，MiniMax 云端可选 | 本地 / `POST api.minimaxi.com/v1/t2a_v2` | 系统免费；MiniMax 按字符 |
 
 > 为什么不用系统语音识别/合成？国行安卓机（如一加 13T）没有系统语音识别服务（RecognitionService 为空），且系统 TTS 音色固定无法克隆；云端方案跨机型通用、音色可定制。
 
@@ -47,7 +47,11 @@
 
 - **DeepSeek 配置**：`apiKey`
 - **语音识别(STT) 配置**：`apiKey`（模型默认 FunAudioLLM/SenseVoiceSmall）
-- **语音合成(TTS) 配置**：`apiKey` + `voiceId`（官方音色如 `male-qn-qingse`，或自己的克隆音色）
+- **语音合成(TTS) 配置**：`apiKey` + `voiceId`
+  - **默认系统 TTS（免费）**：`useCloudTts` 不勾选即可，手机设置→文字转语音 可换系统女声音色
+  - 要 MiniMax 云端时勾选 `useCloudTts`（需余额；克隆音色有 7 天保活机制）
+  - 免费女声（MiniMax 官方音色，无 7 天删除问题）：`female-shaonv`（少女）、`female-yujie`（御姐）、`female-chengshu`（成熟女性）、`female-tianmei`（甜美女性）
+  - 男声：`male-qn-qingse`（青涩青年）等；或自己的克隆音色（如 `TSY_voice01`）
 
 ### 3. 构建运行
 
@@ -79,6 +83,41 @@ curl -X POST https://api.minimaxi.com/v1/voice_clone \
 - 复刻需先完成 MiniMax 实名认证
 - **克隆的音色 7 天未使用会被系统删除**（正常使用 App 即可保留）
 - 克隆他人声音需获得授权
+
+## 语音识别方言说明
+
+**识别引擎开关**：Inspector「语音识别(STT) 配置」→ `provider`：
+- `0`（默认）：OpenAI 兼容接口（硅基流动 SenseVoiceSmall）——支持普通话/粤语/英语/日语/韩语
+- `1`：火山引擎录音文件识别（需 volcAppId / volcAccessToken + 授权开通）
+- `2`：**讯飞语音听写（推荐陕西话）**——官方支持 **23 种方言含陕西话**
+
+**讯飞「方言识别大模型」（陕西话主引擎，已真机端到端验证）**：
+1. 注册 xfyun.cn → 控制台创建应用 → 开通「方言识别大模型」
+2. 控制台复制 **APPID / APIKey / APISecret**
+3. Inspector：provider=2、iflyAppId、iflyApiKey、iflyApiSecret、iflyDomain=slm
+   - iflyAccent 默认 **mulacc**（多口音自动识别，官方 23 种方言含陕西话）
+4. 重新打包即可
+
+**免费备用引擎（降级）**：主识别失败自动切换：
+- 开通「语音听写（流式版）」→ 在 Inspector 的「识别备用引擎(STT 降级)」填一套 SttSettings：
+  provider=2、同样的 APPID/APIKey/APISecret、**iflyDomain=iat**（流式听写协议，免费额度）
+- 主引擎挂了/额度用完时，App 自动用流式听写兜底
+
+**性能**：讯飞音频按 8 倍实时速率上传（2560B@10ms 实测安全），10 秒录音约 1.3 秒传完
+
+## 流式回复与文字显示
+
+- DeepSeek 回复采用 **SSE 流式**：文字边生成边逐个显示（不用等完整回复）
+- 所有 Text 组件已做显示优化：自动换行、溢出不截断、高度随内容自适应增长（运行时自动配置，旧场景同样生效）
+
+## 保活与自愈（防克隆音色被删除）
+
+MiniMax 规则：**克隆音色连续 7 天未合成就会被删除**。App 内置两道防线（默认开启，Inspector「保活与自愈」可关）：
+
+1. **自动保活**：打开 App 时若距上次合成超过 `keepAliveDays`（默认 5 天），后台静默合成一次极短文本（成本约几厘钱），刷新 7 天计时——**客户只要打开过 App，声音就永远不会丢**。
+2. **自愈重克隆**：若仍因超期被删（TTS 报 voice 相关错误），App 自动读取 `Assets/StreamingAssets/VoiceSample/clone_sample.mp3`（内置样本）→ 重新上传 → 重新克隆（复用同一 voice_id）→ 自动重试合成，客户无感知。
+
+> 使用前请把声音样本放到 `Assets/StreamingAssets/VoiceSample/clone_sample.mp3`（10秒~5分钟，mp3/wav/m4a），换样本后重新 Build。
 
 ## 交互方式
 

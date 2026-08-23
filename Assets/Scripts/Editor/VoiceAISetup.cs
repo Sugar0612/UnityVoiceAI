@@ -116,6 +116,8 @@ namespace VoiceAI.EditorTools
             text.alignment = alignment;
             text.color = color;
             text.raycastTarget = false; // 不挡按钮点击
+            text.horizontalOverflow = HorizontalWrapMode.Wrap;
+            text.verticalOverflow = VerticalWrapMode.Overflow; // 长文字不截断
             return text;
         }
     }

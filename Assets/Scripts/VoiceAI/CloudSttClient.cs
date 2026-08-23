@@ -16,11 +16,32 @@ namespace VoiceAI
         [Tooltip("API Key（sk- 开头，硅基流动 https://cloud.siliconflow.cn 免费申请；OpenAI 用 openai 的 key）")]
         public string apiKey = "";
 
-        [Tooltip("模型：硅基流动用 FunAudioLLM/SenseVoiceSmall（中文强）；OpenAI 用 whisper-1")]
+        [Tooltip("模型：硅基流动用 FunAudioLLM/SenseVoiceSmall；OpenAI 用 whisper-1；阿里云百炼用 paraformer-v2 或 paraformer-realtime-v2")]
         public string model = "FunAudioLLM/SenseVoiceSmall";
 
-        [Tooltip("识别语言，中文 zh")]
+        [Tooltip("识别语言，中文 zh；留空则不传")]
         public string language = "zh";
+
+        [Tooltip("方言提示（如 zh-shaanxi 陕西话、zh-yue 粤语、zh-sichuan 四川话）；留空则不传")]
+        public string languageHints = "";
+
+        [Header("识别引擎")]
+        [Tooltip("0=OpenAI兼容接口(硅基流动等，默认)；1=火山引擎录音文件识别(方言候选)")]
+        public int provider = 0;
+
+        [Tooltip("讯飞开放平台 AppID（xfyun.cn 控制台）")]
+        public string iflyAppId = "";
+        [Tooltip("讯飞 APIKey")]
+        public string iflyApiKey = "";
+        [Tooltip("讯飞 APISecret")]
+        public string iflyApiSecret = "";
+        [Tooltip("讯飞方言 accent：方言大模型默认 mulacc（多口音自动识别，含陕西话）")]
+        public string iflyAccent = "mulacc";
+        [Tooltip("讯飞引擎类型，默认 16k_zh")]
+        public string iflyEngineType = "16k_zh";
+
+        [Tooltip("讯飞协议：slm=方言大模型(默认,陕西话)；iat=流式版听写(免费额度,备用)")]
+        public string iflyDomain = "slm";
     }
 
     /// <summary>
@@ -56,9 +77,13 @@ namespace VoiceAI
             var form = new List<IMultipartFormSection>
             {
                 new MultipartFormDataSection("model", settings.model),
-                new MultipartFormDataSection("language", settings.language),
                 new MultipartFormFileSection("file", wavBytes, "audio.wav", "audio/wav"),
             };
+            // 语言/方言仅在填写时传入（兼容不同服务商）
+            if (!string.IsNullOrWhiteSpace(settings.language))
+                form.Add(new MultipartFormDataSection("language", settings.language));
+            if (!string.IsNullOrWhiteSpace(settings.languageHints))
+                form.Add(new MultipartFormDataSection("language_hints", settings.languageHints));
 
             using var uwr = UnityWebRequest.Post(settings.apiUrl.Trim(), form);
             uwr.timeout = 60;

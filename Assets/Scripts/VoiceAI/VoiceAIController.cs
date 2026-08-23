@@ -1,8 +1,10 @@
 using System;
 using System.Collections;
+using System.Text;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem.UI;
+using UnityEngine.Networking;
 using UnityEngine.UI;
 
 namespace VoiceAI
@@ -30,10 +32,22 @@ namespace VoiceAI
         [Header("语音识别(STT) 配置")]
         [SerializeField] private SttSettings stt = new SttSettings();
 
+        [Header("识别备用引擎(STT 降级)")]
+        [Tooltip("主识别引擎失败时自动切换（不填则不用）。示例：讯飞流式听写 provider=2 + iflyDomain=iat")]
+        [SerializeField] private SttSettings sttFallback = null;
+
         [Header("语音合成(TTS) 配置")]
-        [Tooltip("true=用云端TTS(MiniMax，可自定义音色)；false=用系统TTS")]
-        [SerializeField] private bool useCloudTts = true;
+        [Tooltip("true=用云端TTS(MiniMax，可自定义音色)；false=用系统TTS(免费)")]
+        [SerializeField] private bool useCloudTts = false;
         [SerializeField] private TtsSettings tts = new TtsSettings();
+
+        [Header("保活与自愈（防克隆音色被删除）")]
+        [Tooltip("打开App时若超过N天未合成，自动静默合成一次保活（刷新MiniMax的7天计时）")]
+        [SerializeField] private bool autoKeepAlive = true;
+        [Tooltip("保活间隔天数，必须小于 MiniMax 的 7 天删除线，建议 5")]
+        [SerializeField] private float keepAliveDays = 5f;
+        [Tooltip("检测到声音被删除时，自动用内置样本重新克隆并重试")]
+        [SerializeField] private bool autoReclone = true;
 
         [Header("UI 引用（可选）")]
         [Tooltip("状态提示文字，如 正在录音/思考中/播放中")]
@@ -74,6 +88,10 @@ namespace VoiceAI
         private int _silentCount;
         private bool _processing;
         private AudioSource _audioSource;
+        private Text _btnLabel; // 录音按钮上的文字（状态联动）
+        // 保活与自愈状态
+        private const string LastTtsTimeKey = "voiceai_last_tts_time";
+        private bool _recloneDone;   // 本次会话是否已尝试过自动重克隆
 
         private void Awake()
         {
@@ -107,12 +125,161 @@ namespace VoiceAI
                 if (btn != null)
                 {
                     btn.onClick.AddListener(ToggleListening);
+                    _btnLabel = btn.GetComponentInChildren<Text>();
                     Debug.Log("[VoiceAI] 已自动绑定按钮: " + btn.name + " → ToggleListening");
                 }
                 else
                 {
                     Debug.LogWarning("[VoiceAI] 未找到可绑定的 Button（请把本组件挂在 Canvas 上，按钮作为其子物体）");
                 }
+            }
+
+            // 声音保活：闲置超过阈值则静默合成一次，防止 MiniMax 7 天删除克隆音色
+            StartCoroutine(TryKeepAlive());
+
+            // 文字显示优化：自动换行 + 溢出可见 + 高度自适应
+            ConfigureText(statusText, TextAnchor.MiddleCenter);
+            ConfigureText(recognizedText, TextAnchor.UpperCenter);
+            ConfigureText(replyText, TextAnchor.UpperCenter);
+        }
+
+        /// <summary>让 Text 自动换行、不截断、高度随内容增长（向下延伸）</summary>
+        private static void ConfigureText(Text t, TextAnchor align)
+        {
+            if (t == null) return;
+            t.horizontalOverflow = HorizontalWrapMode.Wrap;
+            t.verticalOverflow = VerticalWrapMode.Overflow;
+            t.alignment = align;
+
+            var fitter = t.GetComponent<ContentSizeFitter>();
+            if (fitter == null) fitter = t.gameObject.AddComponent<ContentSizeFitter>();
+            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            var rt = t.rectTransform;
+            rt.pivot = new Vector2(0.5f, 1f); // 顶部锚定，向下生长，避免文字被裁切
+        }
+
+        // ---------- 声音保活与自愈 ----------
+
+        private const string SamplePath = "/VoiceSample/clone_sample.mp3";
+
+        private void SaveTtsTime()
+        {
+            PlayerPrefs.SetString(LastTtsTimeKey, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
+            PlayerPrefs.Save();
+        }
+
+        private long GetLastTtsTime()
+        {
+            string s = PlayerPrefs.GetString(LastTtsTimeKey, "0");
+            return long.TryParse(s, out long v) ? v : 0;
+        }
+
+        /// <summary>静默保活：距上次合成超过阈值时，合成一个极短文本刷新 MiniMax 的 7 天计时</summary>
+        private IEnumerator TryKeepAlive()
+        {
+#if UNITY_ANDROID && !UNITY_EDITOR
+            yield return null; // 等一帧，让 TTS 配置就绪
+            if (!useCloudTts || !autoKeepAlive) yield break;
+            if (string.IsNullOrWhiteSpace(tts.voiceId)) yield break;
+
+            long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            long last = GetLastTtsTime();
+            if (now - last < (long)(keepAliveDays * 86400)) yield break;
+
+            Debug.Log("[VoiceAI] 触发声音保活（闲置超过 " + keepAliveDays + " 天）");
+            yield return CloudTtsClient.Synthesize(tts, "。", _ =>
+            {
+                SaveTtsTime();
+                Debug.Log("[VoiceAI] 保活成功，计时已刷新");
+            }, err =>
+            {
+                Debug.LogWarning("[VoiceAI] 保活失败: " + err);
+                // 声音可能已被删除 → 自动重克隆
+                if (autoReclone && !_recloneDone && CloudTtsClient.IsVoiceMissingError(err))
+                    StartCoroutine(RecloneAndRetry(null));
+            });
+#endif
+            yield break;
+        }
+
+        /// <summary>
+        /// 自动恢复被删除的克隆音色：读取内置样本 → 上传 → 克隆（复用原 voice_id）→ 可选重试原文本。
+        /// retryText 为 null 时只做保活合成。
+        /// </summary>
+        private IEnumerator RecloneAndRetry(string retryText)
+        {
+            _recloneDone = true;
+            SetText(statusText, "检测到声音被清理，正在自动恢复...");
+
+            // 1) 读取内置样本（StreamingAssets；Android 打包时打进 APK）
+            byte[] sample = null;
+            string path = Application.streamingAssetsPath + SamplePath;
+            using (var req = UnityWebRequest.Get(path))
+            {
+                yield return req.SendWebRequest();
+                if (req.result == UnityWebRequest.Result.Success && req.downloadHandler != null)
+                    sample = req.downloadHandler.data;
+            }
+
+            if (sample == null || sample.Length == 0)
+            {
+                SetText(replyText, "⚠ 声音已过期且未内置恢复样本（请把样本放到 StreamingAssets/VoiceSample/clone_sample.mp3）");
+                RaiseError("声音恢复失败：缺少内置样本文件");
+                SetState(VoiceAIState.Idle);
+                yield break;
+            }
+
+            // 2) 上传样本
+            long fileId = 0;
+            bool failed = false;
+            string failMsg = "";
+            yield return CloudTtsClient.UploadCloneSample(tts, sample, "clone_sample.mp3",
+                id => fileId = id,
+                err => { failed = true; failMsg = err; });
+
+            if (failed || fileId <= 0)
+            {
+                SetText(replyText, "⚠ 声音恢复失败: " + failMsg);
+                RaiseError("声音恢复失败: " + failMsg);
+                SetState(VoiceAIState.Idle);
+                yield break;
+            }
+
+            // 3) 克隆（复用同一个 voice_id，App 配置无需改动）
+            failed = false;
+            failMsg = "";
+            yield return CloudTtsClient.CloneVoice(tts, fileId, tts.voiceId.Trim(),
+                () => { },
+                err => { failed = true; failMsg = err; });
+
+            if (failed)
+            {
+                SetText(replyText, "⚠ 声音恢复失败: " + failMsg);
+                RaiseError("声音恢复失败: " + failMsg);
+                SetState(VoiceAIState.Idle);
+                yield break;
+            }
+
+            Debug.Log("[VoiceAI] 声音已重新克隆: " + tts.voiceId.Trim());
+            SetText(statusText, "声音已恢复，继续合成...");
+
+            if (!string.IsNullOrEmpty(retryText))
+            {
+                Speak(retryText);   // 重试原来的合成
+            }
+            else
+            {
+                // 保活场景：克隆后再合成一次极短文本刷新计时
+                yield return CloudTtsClient.Synthesize(tts, "。", _ =>
+                {
+                    SaveTtsTime();
+                    SetState(VoiceAIState.Idle);
+                }, err =>
+                {
+                    SetText(replyText, "⚠ 声音恢复后保活失败: " + err);
+                    SetState(VoiceAIState.Idle);
+                });
             }
         }
 
@@ -262,12 +429,8 @@ namespace VoiceAI
             byte[] wav = WavUtility.ToWav16kMono(_recClip);
             _recClip = null;
 
-            StartCoroutine(CloudSttClient.Transcribe(stt, wav, OnSttSuccess, err =>
-            {
-                SetText(replyText, "⚠ 语音识别失败: " + err);
-                RaiseError("语音识别失败: " + err);
-                SetState(VoiceAIState.Idle);
-            }));
+            // 主识别引擎；失败时自动尝试备用引擎（sttFallback）
+            RunStt(stt, wav);
         }
 
         private void StopRecordingInternal()
@@ -336,6 +499,58 @@ namespace VoiceAI
 
         // ---------- 识别 → DeepSeek → TTS ----------
 
+        private void RunStt(SttSettings settings, byte[] wav)
+        {
+            StartCoroutine(BuildSttRoutine(settings, wav, OnSttSuccess, err => TryFallbackStt(wav, err)));
+        }
+
+        /// <summary>按 provider 构建识别协程：0=OpenAI兼容(硅基流动等)，2=讯飞</summary>
+        private static IEnumerator BuildSttRoutine(SttSettings settings, byte[] wav,
+            Action<string> onOk, Action<string> onFail)
+        {
+            switch (settings.provider)
+            {
+                case 2: return IflytekSttClient.Transcribe(settings, wav, onOk, onFail);
+                default: return CloudSttClient.Transcribe(settings, wav, onOk, onFail);
+            }
+        }
+
+        /// <summary>主引擎失败 → 尝试备用引擎；备用也没配则直接报错</summary>
+        private void TryFallbackStt(byte[] wav, string primaryError)
+        {
+            if (sttFallback != null && IsSttConfigured(sttFallback))
+            {
+                Debug.LogWarning("[VoiceAI] 主识别失败(" + primaryError + ")，切换备用引擎");
+                SetText(statusText, "切换备用识别...");
+                StartCoroutine(BuildSttRoutine(sttFallback, wav, OnSttSuccess, OnSttError));
+            }
+            else
+            {
+                OnSttError(primaryError);
+            }
+        }
+
+        private static bool IsSttConfigured(SttSettings settings)
+        {
+            if (settings == null) return false;
+            switch (settings.provider)
+            {
+                case 2:
+                    return !string.IsNullOrWhiteSpace(settings.iflyAppId)
+                        && !string.IsNullOrWhiteSpace(settings.iflyApiKey)
+                        && !string.IsNullOrWhiteSpace(settings.iflyApiSecret);
+                default:
+                    return !string.IsNullOrWhiteSpace(settings.apiKey);
+            }
+        }
+
+        private void OnSttError(string err)
+        {
+            SetText(replyText, "⚠ 语音识别失败: " + err);
+            RaiseError("语音识别失败: " + err);
+            SetState(VoiceAIState.Idle);
+        }
+
         private void OnSttSuccess(string text)
         {
             if (string.IsNullOrWhiteSpace(text))
@@ -348,10 +563,19 @@ namespace VoiceAI
             Debug.Log("[VoiceAI] 识别结果: " + text);
             OnRecognizedText?.Invoke(text);
             SetText(recognizedText, "你说: " + text);
-            SetText(replyText, "AI 思考中...");
+            SetText(replyText, "");
             SetState(VoiceAIState.Thinking);
 
-            StartCoroutine(DeepSeekClient.SendMessage(deepSeek, text, OnDeepSeekSuccess, OnDeepSeekError));
+            // 流式回复：文字逐个出现（SSE），生成完再进入朗读
+            var sb = new StringBuilder();
+            StartCoroutine(DeepSeekClient.SendMessageStream(deepSeek, text,
+                delta =>
+                {
+                    sb.Append(delta);
+                    SetText(replyText, sb.ToString());
+                },
+                full => OnDeepSeekSuccess(full),
+                OnDeepSeekError));
         }
 
         private void OnDeepSeekSuccess(string reply)
@@ -384,12 +608,20 @@ namespace VoiceAI
                 SetText(statusText, "正在合成语音...");
                 StartCoroutine(CloudTtsClient.Synthesize(tts, text, clip =>
                 {
+                    SaveTtsTime(); // 记录使用时间，刷新保活计时
                     _audioSource.clip = clip;
                     _audioSource.Play();
                     SetText(statusText, "正在朗读回复...");
                     StartCoroutine(WaitPlaybackEnd());
                 }, err =>
                 {
+                    // 声音被 MiniMax 删除（7天未用）→ 自动重克隆并重试
+                    if (autoReclone && !_recloneDone && CloudTtsClient.IsVoiceMissingError(err))
+                    {
+                        Debug.LogWarning("[VoiceAI] 检测到声音缺失，尝试自动恢复: " + err);
+                        StartCoroutine(RecloneAndRetry(text));
+                        return;
+                    }
                     SetText(replyText, "⚠ " + err);
                     RaiseError(err);
                     SetState(VoiceAIState.Idle);
@@ -486,6 +718,27 @@ namespace VoiceAI
                 default: text = ""; break;
             }
             SetText(statusText, text);
+            UpdateButtonLabel();
+        }
+
+        /// <summary>按钮文字随状态变化（点击说话 ↔ 停止说话 等）</summary>
+        private void UpdateButtonLabel()
+        {
+            if (_btnLabel == null) return;
+
+            if (holdToTalk)
+            {
+                _btnLabel.text = State == VoiceAIState.Listening ? "松开结束" : "按住说话";
+                return;
+            }
+
+            switch (State)
+            {
+                case VoiceAIState.Listening: _btnLabel.text = "停止说话"; break;
+                case VoiceAIState.Thinking: _btnLabel.text = "思考中..."; break;
+                case VoiceAIState.Speaking: _btnLabel.text = "点击打断"; break;
+                default: _btnLabel.text = "点击说话"; break;
+            }
         }
 
         private static void SetText(Text target, string value)

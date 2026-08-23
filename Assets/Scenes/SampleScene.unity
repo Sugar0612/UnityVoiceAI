@@ -152,7 +152,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::VoiceAI.VoiceAIController
   deepSeek:
-    apiKey: sk-024a0383146442b5888e98cb74124c99
+    apiKey: sk-9b53b6081a114a74afd50eea83325dc1
     apiUrl: https://api.deepseek.com/chat/completions
     model: deepseek-chat
     maxTokens: 1024
@@ -163,7 +163,28 @@ MonoBehaviour:
     apiKey: sk-cbzpduuvxacafqcdqbvmvucyafskgxluqfmvazjuhdmatweu
     model: FunAudioLLM/SenseVoiceSmall
     language: zh
-  useCloudTts: 1
+    languageHints: 
+    provider: 2
+    iflyAppId: 8a425d45
+    iflyApiKey: 7deb1a9dec1d774e83743af07eb6b246
+    iflyApiSecret: NTk0ZWNkNzEzMmE4ZTI3MDc1OWQyZjQy
+    iflyAccent: mulacc
+    iflyEngineType: 16k_zh
+    iflyDomain: slm
+  sttFallback:
+    apiUrl: https://api.siliconflow.cn/v1/audio/transcriptions
+    apiKey: sk-cbzpduuvxacafqcdqbvmvucyafskgxluqfmvazjuhdmatweu
+    model: FunAudioLLM/SenseVoiceSmall
+    language: zh
+    languageHints: 
+    provider: 2
+    iflyAppId: 8a425d45
+    iflyApiKey: 7deb1a9dec1d774e83743af07eb6b246
+    iflyApiSecret: NTk0ZWNkNzEzMmE4ZTI3MDc1OWQyZjQy
+    iflyAccent: mandarin
+    iflyEngineType: 16k_zh
+    iflyDomain: iat
+  useCloudTts: 0
   tts:
     apiUrl: https://api.minimax.chat/v1/t2a_v2
     apiKey: sk-api-WJkj46IN-2LzqS8Qaw2m4KJBoGayaukFDHnIT8vUlgmHg8XeNbCb6Wwe95BtbGQ0IUpWDlLx0Ia2P6HpJU6yyIIlJGb9NXjN2YpLtR4Y9hvFwJodlE3iQas
@@ -171,6 +192,9 @@ MonoBehaviour:
     model: speech-02-hd
     speed: 1
     sampleRate: 24000
+  autoKeepAlive: 1
+  keepAliveDays: 5
+  autoReclone: 1
   statusText: {fileID: 291421252}
   recognizedText: {fileID: 1893011840}
   replyText: {fileID: 1514330933}
@@ -378,8 +402,8 @@ Camera:
   m_GameObject: {fileID: 330585543}
   m_Enabled: 1
   serializedVersion: 2
-  m_ClearFlags: 1
-  m_BackGroundColor: {r: 0.19215687, g: 0.3019608, b: 0.4745098, a: 0}
+  m_ClearFlags: 2
+  m_BackGroundColor: {r: 0, g: 0, b: 0, a: 0}
   m_projectionMatrixMode: 1
   m_GateFitMode: 2
   m_FOVAxisMode: 0

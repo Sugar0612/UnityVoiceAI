@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Text;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -213,6 +214,151 @@ namespace VoiceAI
             {
                 onError?.Invoke("音频解码失败: " + e.Message);
             }
+        }
+
+        // ================= 声音保活与自愈 =================
+
+        [Serializable]
+        private class UploadResponse
+        {
+            public UploadFile file;
+            public BaseResp base_resp;
+        }
+
+        [Serializable]
+        private class UploadFile
+        {
+            public long file_id;
+        }
+
+        [Serializable]
+        private class CloneRequest
+        {
+            public long file_id;
+            public string voice_id;
+        }
+
+        /// <summary>
+        /// 判断错误信息是否为"声音不存在/被删除"（MiniMax 7天未使用会删除克隆音色）。
+        /// 关键词启发式匹配，命中后应触发自动重新克隆。
+        /// </summary>
+        public static bool IsVoiceMissingError(string errorMsg)
+        {
+            if (string.IsNullOrEmpty(errorMsg)) return false;
+            var lower = errorMsg.ToLowerInvariant();
+            return lower.Contains("voice") || lower.Contains("voice_id") ||
+                   lower.Contains("not found") || lower.Contains("音色") ||
+                   lower.Contains("不存在") || lower.Contains("1004") || lower.Contains("1006");
+        }
+
+        /// <summary>上传声音样本（复刻用），成功后回调 onFileId</summary>
+        public static IEnumerator UploadCloneSample(TtsSettings s, byte[] sampleBytes, string fileName,
+            Action<long> onFileId, Action<string> onError)
+        {
+            if (s == null || string.IsNullOrWhiteSpace(s.apiKey))
+            {
+                onError?.Invoke("请先配置 TTS 的 API Key");
+                yield break;
+            }
+            if (sampleBytes == null || sampleBytes.Length == 0)
+            {
+                onError?.Invoke("声音样本为空");
+                yield break;
+            }
+
+            var form = new List<IMultipartFormSection>
+            {
+                new MultipartFormDataSection("purpose", "voice_clone"),
+                new MultipartFormFileSection("file", sampleBytes, fileName, "audio/mpeg"),
+            };
+
+            using var uwr = UnityWebRequest.Post("https://api.minimaxi.com/v1/files/upload", form);
+            uwr.timeout = 60;
+            uwr.SetRequestHeader("Authorization", "Bearer " + s.apiKey.Trim());
+
+            yield return uwr.SendWebRequest();
+
+            if (uwr.result != UnityWebRequest.Result.Success)
+            {
+                onError?.Invoke($"上传失败(HTTP {uwr.responseCode}): " + Truncate(uwr.downloadHandler?.text ?? uwr.error, 200));
+                yield break;
+            }
+
+            try
+            {
+                var resp = JsonUtility.FromJson<UploadResponse>(uwr.downloadHandler.text);
+                if (resp == null || resp.base_resp == null || resp.base_resp.status_code != 0)
+                {
+                    string msg = resp?.base_resp != null
+                        ? $"status_code={resp.base_resp.status_code}, {resp.base_resp.status_msg}"
+                        : "响应格式异常";
+                    onError?.Invoke("上传失败: " + msg);
+                    yield break;
+                }
+                onFileId?.Invoke(resp.file.file_id);
+            }
+            catch (Exception e)
+            {
+                onError?.Invoke("解析上传响应失败: " + e.Message);
+            }
+        }
+
+        /// <summary>用已上传的样本克隆声音（复用原 voice_id），成功后 onSuccess</summary>
+        public static IEnumerator CloneVoice(TtsSettings s, long fileId, string voiceId,
+            Action onSuccess, Action<string> onError)
+        {
+            if (s == null || string.IsNullOrWhiteSpace(s.apiKey))
+            {
+                onError?.Invoke("请先配置 TTS 的 API Key");
+                yield break;
+            }
+            if (fileId <= 0 || string.IsNullOrWhiteSpace(voiceId))
+            {
+                onError?.Invoke("复刻参数不完整（file_id/voice_id）");
+                yield break;
+            }
+
+            var req = new CloneRequest { file_id = fileId, voice_id = voiceId.Trim() };
+            string json = JsonUtility.ToJson(req);
+
+            using var uwr = new UnityWebRequest("https://api.minimaxi.com/v1/voice_clone", "POST");
+            uwr.timeout = 120;
+            uwr.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(json));
+            uwr.downloadHandler = new DownloadHandlerBuffer();
+            uwr.SetRequestHeader("Content-Type", "application/json; charset=utf-8");
+            uwr.SetRequestHeader("Authorization", "Bearer " + s.apiKey.Trim());
+
+            yield return uwr.SendWebRequest();
+
+            if (uwr.result != UnityWebRequest.Result.Success)
+            {
+                onError?.Invoke($"克隆请求失败(HTTP {uwr.responseCode}): " + Truncate(uwr.downloadHandler?.text ?? uwr.error, 200));
+                yield break;
+            }
+
+            try
+            {
+                var resp = JsonUtility.FromJson<BaseRespWrap>(uwr.downloadHandler.text);
+                if (resp?.base_resp == null || resp.base_resp.status_code != 0)
+                {
+                    string msg = resp?.base_resp != null
+                        ? $"status_code={resp.base_resp.status_code}, {resp.base_resp.status_msg}"
+                        : "响应格式异常";
+                    onError?.Invoke("克隆失败: " + msg);
+                    yield break;
+                }
+                onSuccess?.Invoke();
+            }
+            catch (Exception e)
+            {
+                onError?.Invoke("解析克隆响应失败: " + e.Message);
+            }
+        }
+
+        [Serializable]
+        private class BaseRespWrap
+        {
+            public BaseResp base_resp;
         }
 
         /// <summary>hex 字符串 → 字节数组</summary>
