@@ -9,20 +9,37 @@ namespace VoiceAI
     public static class WavUtility
     {
         public static byte[] ToWav16kMono(AudioClip clip)
+            => ToWav16kMono(clip, 0f, -1f);
+
+        /// <summary>
+        /// 带裁剪的转换：只取 [startSec, endSec) 的音频（endSec<0 表示到结尾）。
+        /// 用于上传前剔除等待开口的静音段，减少上传数据量/耗时。
+        /// </summary>
+        public static byte[] ToWav16kMono(AudioClip clip, float startSec, float endSec)
         {
             if (clip == null || clip.samples == 0) return null;
 
             const int targetRate = 16000;
             float[] data = new float[clip.samples * clip.channels];
+
+            // 裁剪范围换算为源采样点（钳制到有效区间）
+            int startSample = Mathf.Clamp(Mathf.FloorToInt(startSec * clip.frequency), 0, clip.samples);
+            int endSample = endSec < 0
+                ? clip.samples
+                : Mathf.Clamp(Mathf.CeilToInt(endSec * clip.frequency), startSample, clip.samples);
+            int sampleCount = endSample - startSample;
+            if (sampleCount <= 0) return null;
+
             clip.GetData(data, 0);
 
-            // 1) 转单声道
-            int monoLen = data.Length / clip.channels;
+            // 1) 裁剪 + 转单声道（只处理 [startSample, endSample) 区间）
+            int monoLen = sampleCount;
             float[] mono = new float[monoLen];
             for (int i = 0; i < monoLen; i++)
             {
                 float sum = 0f;
-                for (int c = 0; c < clip.channels; c++) sum += data[i * clip.channels + c];
+                for (int c = 0; c < clip.channels; c++)
+                    sum += data[(startSample + i) * clip.channels + c];
                 mono[i] = sum / clip.channels;
             }
 

@@ -23,8 +23,15 @@ namespace VoiceAI
         public int maxTokens = 1024;
         public float temperature = 0.7f;
 
-        [TextArea(1, 4)]
-        public string systemPrompt = "你是一个友好的中文语音助手，回答请简洁、口语化，控制在100字以内。";
+        [TextArea(2, 6)]
+        [Tooltip("AI 角色设定（医院场景：专业医师助手）")]
+        public string personaPrompt =
+            "你是医院里的一名专业医师语音助手，名叫'何夕月'，为患者和家属解答健康问题。要求：" +
+            "1.站在专业医师角度回答，用语严谨但通俗，不堆砌术语；" +
+            "2.回答简洁口语化，适合语音播报，控制在100字以内；" +
+            "3.给出用药、诊断类建议时，提醒患者以医生当面诊断为准；" +
+            "4.若患者描述胸痛、呼吸困难、大出血、意识不清等急症症状，立即建议拨打120或马上前往急诊，不做多余展开；" +
+            "5.基于循证医学客观回答，不夸大病情、不制造恐慌，也不回避问题。";
     }
 
     /// <summary>DeepSeek Chat API 的轻量客户端（OpenAI 兼容格式，非流式）</summary>
@@ -91,7 +98,7 @@ namespace VoiceAI
                 stream = false,
                 messages = new[]
                 {
-                    new ChatMessage { role = "system", content = settings.systemPrompt },
+                    new ChatMessage { role = "system", content = settings.personaPrompt },
                     new ChatMessage { role = "user", content = userText },
                 },
             };
@@ -179,7 +186,7 @@ namespace VoiceAI
                 stream = true,
                 messages = new[]
                 {
-                    new ChatMessage { role = "system", content = settings.systemPrompt },
+                    new ChatMessage { role = "system", content = settings.personaPrompt },
                     new ChatMessage { role = "user", content = userText },
                 },
             };

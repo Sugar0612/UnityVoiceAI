@@ -18,7 +18,7 @@ namespace VoiceAI
     /// </summary>
     public static class IflytekSttClient
     {
-        private const int AudioChunkBytes = 2560; // 实测 2560B@10ms（8倍实时）服务器可接受
+        private const int AudioChunkBytes = 5120; // 每帧音频字节数（5120B = 160ms@16k）
 
         // ============ 方言大模型 (slm) 帧结构 ============
         [Serializable] private class SlmHeader { public string app_id; public int status; }
@@ -156,6 +156,30 @@ namespace VoiceAI
                 await ws.ConnectAsync(new Uri(url), cts.Token);
                 Debug.Log("[VoiceAI] 讯飞(" + (v2 ? "流式听写" : "方言大模型") + ")已连接");
 
+                // ---------- 后台接收任务：与发送并行 ----------
+                // JsonUtility 只能在 Unity 主线程调用，因此后台线程仅收集原始消息，
+                // 主线程在发送过程中/结束后消费队列并解析。
+                var recvQueue = new System.Collections.Concurrent.ConcurrentQueue<string>();
+                Exception recvError = null;
+                var recvTask = Task.Run(async () =>
+                {
+                    var buffer = new byte[16384];
+                    var msgSb = new StringBuilder();
+                    try
+                    {
+                        while (ws.State == WebSocketState.Open)
+                        {
+                            var recv = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), cts.Token);
+                            if (recv.MessageType == WebSocketMessageType.Close) break;
+                            msgSb.Append(Encoding.UTF8.GetString(buffer, 0, recv.Count));
+                            if (!recv.EndOfMessage) continue;
+                            recvQueue.Enqueue(msgSb.ToString());
+                            msgSb.Clear();
+                        }
+                    }
+                    catch (Exception e) { recvError = e; }
+                });
+
                 string appId = s.iflyAppId.Trim();
                 string accent = string.IsNullOrWhiteSpace(s.iflyAccent) ? (v2 ? "mandarin" : "mulacc") : s.iflyAccent.Trim();
 
@@ -195,82 +219,89 @@ namespace VoiceAI
                     byte[] jsonBytes = Encoding.UTF8.GetBytes(json);
                     await ws.SendAsync(new ArraySegment<byte>(jsonBytes), WebSocketMessageType.Text, true, cts.Token);
 
+                    // 帧间隔：5120B/帧 + 10ms 间隔 ≈ 16倍实时速率（此前 2560B+10ms 为 8倍），
+                    // 显著缩短上传耗时；讯飞流式接口可容忍适度过速。
                     if (i < totalChunks - 1)
-                        await Task.Delay(10, cts.Token); // 10ms 帧间隔（8倍实时速率，实测安全）
+                        await Task.Delay(10, cts.Token);
                 }
                 Debug.Log("[VoiceAI] 讯飞音频发送完毕: " + totalChunks + " 帧, " + pcm.Length + " 字节");
 
-                // ---------- 接收结果 ----------
-                var buffer = new byte[16384];
+                // ---------- 主线程消费接收队列：解析并判定最终结果 ----------
                 var textSb = new StringBuilder();
-                var msgSb = new StringBuilder();
+                bool finished = false;
 
-                while (ws.State == WebSocketState.Open)
+                while (!finished && !cts.IsCancellationRequested)
                 {
-                    var recv = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), cts.Token);
-                    if (recv.MessageType == WebSocketMessageType.Close) break;
-
-                    msgSb.Append(Encoding.UTF8.GetString(buffer, 0, recv.Count));
-                    if (!recv.EndOfMessage) continue;
-
-                    string msg = msgSb.ToString();
-                    msgSb.Clear();
-
-                    Debug.Log("[VoiceAI] 讯飞返回: " + (msg.Length > 300 ? msg.Substring(0, 300) + "..." : msg));
-
-                    if (v2)
+                    // 优先清空已到达的增量结果
+                    while (recvQueue.TryDequeue(out string msg))
                     {
-                        V2Response r2 = null;
-                        try { r2 = JsonUtility.FromJson<V2Response>(msg); } catch { }
-                        if (r2 == null) continue;
-                        if (r2.code != 0)
-                        {
-                            onError?.Invoke("讯飞识别失败: code=" + r2.code + ", " + r2.message);
-                            return;
-                        }
-                        if (r2.status == 2)
-                        {
-                            string final = ExtractWsText(r2.data?.result?.ws);
-                            if (!string.IsNullOrEmpty(final)) onSuccess?.Invoke(final);
-                            else onError?.Invoke("讯飞识别结果为空");
-                            return;
-                        }
-                    }
-                    else
-                    {
-                        RecvFrame frame = null;
-                        try { frame = JsonUtility.FromJson<RecvFrame>(msg); } catch { }
-                        if (frame?.header == null) continue;
+                        Debug.Log("[VoiceAI] 讯飞返回: " + (msg.Length > 300 ? msg.Substring(0, 300) + "..." : msg));
 
-                        if (frame.header.code != 0)
+                        if (v2)
                         {
-                            onError?.Invoke("讯飞识别失败: code=" + frame.header.code + ", " + frame.header.message);
-                            return;
-                        }
-
-                        string resultText = frame.payload?.result?.text;
-                        if (!string.IsNullOrEmpty(resultText))
-                        {
-                            try
+                            V2Response r2 = null;
+                            try { r2 = JsonUtility.FromJson<V2Response>(msg); } catch { }
+                            if (r2 == null) continue;
+                            if (r2.code != 0)
                             {
-                                string innerJson = Encoding.UTF8.GetString(Convert.FromBase64String(resultText));
-                                var inner = JsonUtility.FromJson<InnerResult>(innerJson);
-                                AppendWsText(textSb, inner?.ws);
+                                onError?.Invoke("讯飞识别失败: code=" + r2.code + ", " + r2.message);
+                                finished = true;
+                                break;
                             }
-                            catch { }
+                            if (r2.status == 2)
+                            {
+                                string final = ExtractWsText(r2.data?.result?.ws);
+                                if (!string.IsNullOrEmpty(final)) onSuccess?.Invoke(final);
+                                else onError?.Invoke("讯飞识别结果为空");
+                                finished = true;
+                                break;
+                            }
                         }
-
-                        if (frame.payload?.result?.status == 2 || frame.header.status == 2)
+                        else
                         {
-                            string final = textSb.ToString().Trim();
-                            if (!string.IsNullOrEmpty(final)) onSuccess?.Invoke(final);
-                            else onError?.Invoke("讯飞识别结果为空");
-                            return;
+                            RecvFrame frame = null;
+                            try { frame = JsonUtility.FromJson<RecvFrame>(msg); } catch { }
+                            if (frame?.header == null) continue;
+
+                            if (frame.header.code != 0)
+                            {
+                                onError?.Invoke("讯飞识别失败: code=" + frame.header.code + ", " + frame.header.message);
+                                finished = true;
+                                break;
+                            }
+
+                            string resultText = frame.payload?.result?.text;
+                            if (!string.IsNullOrEmpty(resultText))
+                            {
+                                try
+                                {
+                                    string innerJson = Encoding.UTF8.GetString(Convert.FromBase64String(resultText));
+                                    var inner = JsonUtility.FromJson<InnerResult>(innerJson);
+                                    AppendWsText(textSb, inner?.ws);
+                                }
+                                catch { }
+                            }
+
+                            if (frame.payload?.result?.status == 2 || frame.header.status == 2)
+                            {
+                                string final = textSb.ToString().Trim();
+                                if (!string.IsNullOrEmpty(final)) onSuccess?.Invoke(final);
+                                else onError?.Invoke("讯飞识别结果为空");
+                                finished = true;
+                                break;
+                            }
                         }
                     }
+
+                    if (finished) break;
+                    if (recvError != null) throw recvError;
+                    if (recvTask.IsCompleted && recvQueue.IsEmpty) break; // 服务端已关闭且无更多消息
+
+                    await Task.Delay(20, cts.Token);
                 }
 
-                onError?.Invoke("讯飞连接提前关闭");
+                if (!finished)
+                    onError?.Invoke("讯飞连接提前关闭");
             }
             catch (OperationCanceledException)
             {

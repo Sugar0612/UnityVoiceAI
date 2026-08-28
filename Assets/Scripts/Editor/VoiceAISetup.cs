@@ -53,12 +53,12 @@ namespace VoiceAI.EditorTools
             UnityEventTools.AddPersistentListener(button.onClick, controller.ToggleListening);
             // 总控组件自身也实现了 IPointerClickHandler，即使不绑定也能响应点击
 
-            CreateText(btnGO.transform, "Label", "点击说话",
+            CreateText(btnGO.transform, "Label", "手动说话",
                 new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
                 Vector2.zero, new Vector2(340, 80), 48, TextAnchor.MiddleCenter, Color.white);
 
             // ---------- 文字区 ----------
-            var status = CreateText(canvasGO.transform, "StatusText", "点击按钮开始说话",
+            var status = CreateText(canvasGO.transform, "StatusText", "说\"何夕月\"唤醒我",
                 new Vector2(0.5f, 0.85f), new Vector2(0.5f, 0.85f),
                 Vector2.zero, new Vector2(960, 60), 32, TextAnchor.MiddleCenter, Color.white);
 
@@ -92,7 +92,7 @@ namespace VoiceAI.EditorTools
                 UnityEngine.SceneManagement.SceneManager.GetActiveScene());
 
             Selection.activeGameObject = canvasGO;
-            Debug.Log("[VoiceAI] 演示 UI 已创建。选中 VoiceAI_Canvas，在 Inspector 中填入 DeepSeek API Key，然后构建到 Android 真机测试。");
+            Debug.Log("[VoiceAI] 演示 UI 已创建。唤醒词模式默认开启（说\"何夕月\"自动开始录音，按钮为手动备用）；选中 VoiceAI_Canvas 填入各 API Key 后构建到 Android 真机测试。");
         }
 
         private static Text CreateText(Transform parent, string name, string content,

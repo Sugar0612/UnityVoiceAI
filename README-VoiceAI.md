@@ -5,6 +5,7 @@
 ## 架构总览
 
 ```
+说"何夕月" → [⓪ 唤醒词检测 sherpa-onnx] → 自动开始录音（无需点击按钮）
 你说话 → [① Microphone 录音] → WAV二进制 → [② 云端识别 STT] → 文字
         → [③ DeepSeek 大模型] → 回复文字 → [④ 云端语音合成 TTS] → 音频 → 扬声器播放
 ```
@@ -22,7 +23,12 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| `Assets/Scripts/VoiceAI/VoiceAIController.cs` | 总控：录音→识别→DeepSeek→TTS，状态机、权限、按钮自动绑定、静音自动停止 |
+| `Assets/Scripts/VoiceAI/VoiceAIController.cs` | 总控：唤醒词→录音→识别→DeepSeek→TTS，状态机、权限、按钮自动绑定、静音自动停止 |
+| `Assets/Scripts/VoiceAI/WakeWordDetector.cs` | 唤醒词检测：常驻麦克风 + sherpa-onnx 关键词检测，命中"何夕月"触发录音 |
+| `Assets/Scripts/VoiceAI/SherpaOnnxNative.cs` | sherpa-onnx C API 的 P/Invoke 封装（结构体布局与 c-api.h 对齐） |
+| `Assets/Scripts/VoiceAI/EdgeGlowEffect.cs` | 屏幕四边光效，随状态变色（纯观感） |
+| `Assets/StreamingAssets/KwsModel/` | 唤醒词模型：流式 zipformer 拼音 transducer（encoder/decoder/joiner + tokens + keywords） |
+| `Assets/Plugins/Android/arm64-v8a/` | sherpa-onnx / onnxruntime 原生库 |
 | `Assets/Scripts/VoiceAI/WavUtility.cs` | AudioClip → WAV（16kHz 单声道 PCM16） |
 | `Assets/Scripts/VoiceAI/CloudSttClient.cs` | 云端识别客户端（OpenAI 兼容 /audio/transcriptions） |
 | `Assets/Scripts/VoiceAI/DeepSeekClient.cs` | DeepSeek Chat API 客户端 |
@@ -121,9 +127,20 @@ MiniMax 规则：**克隆音色连续 7 天未合成就会被删除**。App 内�
 
 ## 交互方式
 
-- 默认**点击切换**：点一下开始录音，再点一下结束（或静音 2.5 秒自动结束，最长 25 秒）
-- **按住说话**：Inspector 勾选 `holdToTalk`
-- 状态机：空闲 → 录音中 → 思考中（识别+大模型）→ 朗读中 → 空闲
+- 默认**唤醒词**：说"何夕月"自动开始录音，说完静音 2.5 秒自动结束 → 识别 → DeepSeek → 朗读（无需点击按钮）
+- **手动按钮（备用）**：场景里的按钮仍可点击开始/结束（说"何夕月"也能打断朗读开始新对话）
+- **按住说话**：Inspector 勾选 `holdToTalk`（与唤醒词可共存）
+- 状态机：空闲（监听唤醒词）→ 录音中 → 思考中（识别+大模型）→ 朗读中 → 空闲
+
+## 唤醒词
+
+- 默认唤醒词 **"何夕月"**（`StreamingAssets/KwsModel/keywords.txt` 同时配置了"何夕月"与"你好何夕月"，两个都能触发）
+- 实现：本地 **sherpa-onnx 关键词检测**（流式 zipformer 拼音 transducer 模型），全程离线、零延迟、不消耗云端额度
+- 首次运行会自动把模型从 StreamingAssets 复制到 `persistentDataPath/KwsModel`（原生库需要磁盘真实路径）
+- Inspector「唤醒词」配置：
+  - `enableWakeWord`（默认开）：false 则退回纯按钮模式
+  - `wakeWordText`（默认"何夕月"）：仅用于界面提示，实际匹配由 keywords.txt 决定
+  - `wakeOnlyWhenIdle`（默认开）：true=思考/朗读中忽略唤醒词，false=随时可打断
 
 ## 常见问题
 
@@ -134,6 +151,7 @@ MiniMax 规则：**克隆音色连续 7 天未合成就会被删除**。App 内�
 | DeepSeek 401 | Key 失效，去平台重新生成 |
 | TTS 合成失败 status_code≠0 | MiniMax Key/实名认证/voice_id 问题 |
 | 没有识别到内容 | 声音太小或静音阈值提前触发，调大 Silence Auto Stop Seconds |
+| 说"何夕月"没反应 | 确认已授权麦克风；首次启动联网等待模型复制完成；看 Logcat 是否有 `[WakeWord]` 日志 |
 | 按钮无反应 | 确认 EventSystem 存在（组件会自动创建）；检查 Console 日志 |
 
 ## 安全提醒

@@ -106,6 +106,19 @@ namespace VoiceAI
             }
         }
 
+        /// <summary>是否正在朗读（TextToSpeech.isSpeaking，标准公开 API，
+        /// 可在 OnUtteranceCompleted 回调不可用的设备上轮询播放状态）</summary>
+        public bool IsSpeaking()
+        {
+            if (!_ready || _tts == null) return false;
+            try { return _tts.Call<bool>("isSpeaking"); }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[VoiceAI] TTS isSpeaking: " + e.Message);
+                return false;
+            }
+        }
+
         /// <summary>停止当前朗读</summary>
         public void Stop()
         {
