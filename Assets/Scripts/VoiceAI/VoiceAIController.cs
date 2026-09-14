@@ -87,6 +87,18 @@ namespace VoiceAI
         [Tooltip("优先使用 Android 系统自带识别（国行 ROM 内置引擎，无需联网 Key、速度快）；不可用或失败自动回退云端 STT")]
         [SerializeField] private bool preferSystemStt = true;
 
+        [Header("数字人")]
+        [Tooltip("AI 说话时播放动画的数字人模型（留空则自动查找场景中名为 anim_shuzirenbangding03 的物体）")]
+        [SerializeField] private GameObject digitalHuman;
+        [Tooltip("AI 开始说话时循环播放的动画名（Legacy Animation）")]
+        [SerializeField] private string speakAnimName = "Take 001";
+
+        [Header("交互开关")]
+        [Tooltip("true=隐藏\"点击说话\"按钮（唤醒词免按键模式下无需按钮）")]
+        [SerializeField] private bool hideTalkButton = true;
+        [Tooltip("true=隐藏对话文字UI（识别出的内容 + AI回复文字），仅保留状态提示，错误提示走状态栏")]
+        [SerializeField] private bool hideDialogueText = true;
+
         public VoiceAIState State { get; private set; } = VoiceAIState.Idle;
 
         public event Action<VoiceAIState> OnStateChanged;
@@ -117,6 +129,7 @@ namespace VoiceAI
         private Text _btnLabel; // 录音按钮上的文字（状态联动）
         private WakeWordDetector _wake; // 唤醒词检测器（运行时自动挂载）
         private EdgeGlowEffect _glow;   // 边缘光效（运行时自动挂载）
+        private Animation _dhAnim;      // 数字人的 Legacy 动画组件（说话时循环播放）
         // 保活与自愈状态
         private const string LastTtsTimeKey = "voiceai_last_tts_time";
         private bool _recloneDone;   // 本次会话是否已尝试过自动重克隆
@@ -136,7 +149,7 @@ namespace VoiceAI
             _tts = new AndroidTextToSpeech();
             _tts.OnReady += () => Debug.Log("[VoiceAI] TTS 已就绪");
             _tts.OnError += msg => { RaiseError(msg); SetState(VoiceAIState.Idle); };
-            _tts.OnUtteranceCompleted += () => SetState(VoiceAIState.Idle);
+            _tts.OnUtteranceCompleted += OnSystemTtsUtteranceEnd;
             _tts.Initialize("zh-CN");
 #endif
         }
@@ -147,14 +160,20 @@ namespace VoiceAI
 
             // 自动绑定场景中的按钮（运行时绑定，无需在 Inspector 手动配置 OnClick）
             // 与按钮持久化绑定共存时，ToggleListening 的同帧去重会避免重复触发
-            if (!holdToTalk)
+            // hideTalkButton=true 时直接隐藏按钮（唤醒词免按键交互），也不绑定事件
+            var bindBtn = GetComponentInChildren<Button>(true);
+            if (hideTalkButton && bindBtn != null)
             {
-                var btn = GetComponentInChildren<Button>();
-                if (btn != null)
+                bindBtn.gameObject.SetActive(false);
+                Debug.Log("[VoiceAI] 已隐藏说话按钮（唤醒词免按键交互）");
+            }
+            else if (!holdToTalk)
+            {
+                if (bindBtn != null)
                 {
-                    btn.onClick.AddListener(ToggleListening);
-                    _btnLabel = btn.GetComponentInChildren<Text>();
-                    Debug.Log("[VoiceAI] 已自动绑定按钮: " + btn.name + " → ToggleListening");
+                    bindBtn.onClick.AddListener(ToggleListening);
+                    _btnLabel = bindBtn.GetComponentInChildren<Text>();
+                    Debug.Log("[VoiceAI] 已自动绑定按钮: " + bindBtn.name + " → ToggleListening");
                 }
                 else
                 {
@@ -170,12 +189,123 @@ namespace VoiceAI
             ConfigureText(recognizedText, TextAnchor.UpperCenter, 34, 1.5f, Color.white);
             ConfigureText(replyText, TextAnchor.UpperCenter, 34, 1.5f, new Color(0.92f, 0.98f, 1f));
 
+            // 纯语音+数字人交互：隐藏对话文字（识别结果 + AI回复），错误提示已走状态栏(RaiseError)
+            if (hideDialogueText)
+            {
+                if (recognizedText != null) recognizedText.gameObject.SetActive(false);
+                if (replyText != null) replyText.gameObject.SetActive(false);
+                Debug.Log("[VoiceAI] 已隐藏对话文字UI（识别结果 + AI回复）");
+            }
+
             // 按钮美化：透明圆角 + 半透明描边（运行时生成圆角 Sprite，无需美术资源）
-            PolishButton();
+            if (!hideTalkButton) PolishButton();
+
+            // 数字人：找到模型与 Legacy 动画片段，说话状态联动播放
+            InitDigitalHuman();
 
             // 唤醒词 + 边缘光效（无需点击按钮即可唤醒）
             InitWakeWordAndGlow();
             UpdateStatusText(); // 唤醒模式下立即刷新状态提示
+
+#if UNITY_ANDROID && !UNITY_EDITOR
+            StartKioskWatchdog();
+#endif
+        }
+
+        /// <summary>启动 Android 原生看门狗服务（:watchdog 独立进程）：主进程崩溃后自动拉起应用</summary>
+        private void StartKioskWatchdog()
+        {
+            try
+            {
+                using (var up = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
+                using (var activity = up.GetStatic<AndroidJavaObject>("currentActivity"))
+                using (var kiosk = new AndroidJavaClass("com.parasiticwasps.voiceai.kiosk.Kiosk"))
+                {
+                    kiosk.CallStatic("startWatchdog", activity);
+                }
+                Debug.Log("[VoiceAI] 看门狗服务已启动（崩溃自动拉起）");
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[VoiceAI] 看门狗启动失败: " + e.Message);
+            }
+        }
+
+        /// <summary>
+        /// 数字人初始化：定位模型与其 Legacy 动画片段，并把片段设为循环。
+        /// 模型未手动指定时自动按名字查找（anim_shuziren）。
+        /// </summary>
+        private void InitDigitalHuman()
+        {
+            var go = digitalHuman != null ? digitalHuman : GameObject.Find("anim_shuzirenbangding03");
+            if (go == null)
+            {
+                Debug.LogWarning("[VoiceAI] 未找到数字人模型，说话时不播放动画");
+                return;
+            }
+
+            _dhAnim = go.GetComponentInChildren<Animation>(true);
+            if (_dhAnim == null)
+            {
+                Debug.LogWarning("[VoiceAI] 数字人 " + go.name + " 上没有 Animation 组件（请确认 FBX 导入模式为 Legacy）");
+                return;
+            }
+
+            if (_dhAnim.GetClip(speakAnimName) == null)
+            {
+                var names = new StringBuilder();
+                foreach (AnimationState st in _dhAnim) names.Append(st == null ? "" : st.name + ",");
+                Debug.LogWarning("[VoiceAI] 数字人上没有动画 \"" + speakAnimName + "\"，现有片段: " + names);
+                _dhAnim = null;
+                return;
+            }
+
+            _dhAnim[speakAnimName].wrapMode = WrapMode.Loop; // 循环播放
+            // 禁止开场自动播放：动画只随 AI 说话状态启停
+            _dhAnim.playAutomatically = false;
+            DhFreezeAtFrame0(); // 初始就摆在第0帧（闭嘴姿态）
+            Debug.Log("[VoiceAI] 数字人动画已就绪: " + go.name + " / " + speakAnimName + "（循环，停止时定格第0帧）");
+        }
+
+        /// <summary>是否有 TTS 音频正在实际出声（云端=AudioSource，系统=TTS引擎）</summary>
+        private bool IsTtsAudiblyPlaying()
+        {
+            if (_audioSource != null && _audioSource.isPlaying) return true;
+            return _tts != null && _tts.IsSpeaking();
+        }
+
+        /// <summary>从头开始循环播放说话动画（第0帧起步）</summary>
+        private void DhPlayTalk()
+        {
+            var st = _dhAnim[speakAnimName];
+            st.speed = 1f;
+            st.weight = 1f;
+            st.time = 0f;
+            st.enabled = true; // 启用状态即按 speed 推进，无需 Play()
+        }
+
+        /// <summary>把说话动画定格在第0帧（嘴闭合的姿态）：停在中间张嘴帧会很怪</summary>
+        private void DhFreezeAtFrame0()
+        {
+            var st = _dhAnim[speakAnimName];
+            st.speed = 0f;
+            st.weight = 1f;
+            st.time = 0f;
+            st.enabled = true;
+            _dhAnim.Sample(); // 立刻把第0帧姿态写入骨骼
+        }
+
+        /// <summary>状态切换时联动数字人动画：说话时循环播放，安静后定格到第0帧</summary>
+        private void UpdateDigitalHumanAnim(VoiceAIState state)
+        {
+            if (_dhAnim == null) return;
+            if (state == VoiceAIState.Speaking)
+            {
+                DhPlayTalk(); // 每次开始说话都从第0帧循环播放
+                return;
+            }
+            // 离开说话态：若 TTS 仍在实际出声（个别机型回调误报/兜底超时偏短），先不停，由 Update 在安静后复位
+            if (!IsTtsAudiblyPlaying()) DhFreezeAtFrame0();
         }
 
         /// <summary>让 Text 自动换行、不截断、高度随内容增长；并统一排版参数</summary>
@@ -547,11 +677,17 @@ namespace VoiceAI
 #if UNITY_ANDROID && !UNITY_EDITOR
                 if (_tts != null && _tts.IsReady && _tts.Speak(wakeAckText))
                 {
-                    // 轮询 isSpeaking 等待播完（该设备 OnUtteranceCompleted 回调已失效）
+                    // 轮询 isSpeaking 等待播完（该设备 OnUtteranceCompleted 回调已失效）。
+                    // 保底最短时长：即使 IsSpeaking 置位不可靠，也保证应答播完、数字人动画可见
                     yield return new WaitForSeconds(0.1f); // speak 后状态置位有延迟
-                    float timeout = Time.unscaledTime + 3f; // 防御：TTS 异常时不永久卡住
-                    while (_tts.IsSpeaking() && Time.unscaledTime < timeout)
+                    float minEnd = Time.unscaledTime + 1f + wakeAckText.Length * 0.4f;
+                    float timeout = Time.unscaledTime + 8f; // 防御：TTS 异常时不永久卡住
+                    while (Time.unscaledTime < timeout)
+                    {
+                        bool speaking = _tts.IsSpeaking();
+                        if (!speaking && Time.unscaledTime >= minEnd) break;
                         yield return new WaitForSeconds(0.05f);
+                    }
                     yield return new WaitForSeconds(0.15f); // 尾音
                 }
                 else
@@ -1049,8 +1185,8 @@ namespace VoiceAI
             {
                 if (_tts.Speak(text))
                 {
-                    // 安全兜底：如果系统没有回调播完事件，按语速估算时间后自动复位
-                    StartCoroutine(SafetyResetAfterSpeaking(text));
+                    // 等系统 TTS 真正播完再复位（以 IsSpeaking 轮询为准，估算上限仅兜底）
+                    StartCoroutine(WaitSystemTtsEndThenIdle(text));
                 }
                 else
                 {
@@ -1077,10 +1213,43 @@ namespace VoiceAI
             SetState(VoiceAIState.Idle);
         }
 
-        private IEnumerator SafetyResetAfterSpeaking(string reply)
+        /// <summary>
+        /// 等系统 TTS 真正播完再复位状态。
+        /// 部分机型 onUtteranceCompleted 回调不可靠，以 IsSpeaking 轮询 + 持续安静0.3秒为准；
+        /// 上限按语速宽松估算，仅用于 TTS 卡死时的兜底复位。
+        /// （旧版按 0.12秒/字 估算，比实际语速快一倍，导致语音没播完就提前回 Idle、数字人动画中途停止）
+        /// </summary>
+        private IEnumerator WaitSystemTtsEndThenIdle(string reply)
         {
-            float wait = 3f + reply.Length * 0.12f; // 粗略按语速估算
-            yield return new WaitForSeconds(wait);
+            yield return new WaitForSeconds(0.15f); // Speak 后状态置位有延迟
+            float deadline = Time.unscaledTime + 8f + reply.Length * 0.6f;
+            float quietSince = -1f;
+            while (Time.unscaledTime < deadline)
+            {
+                if (_tts == null || !_tts.IsSpeaking())
+                {
+                    if (quietSince < 0f) quietSince = Time.unscaledTime;
+                    else if (Time.unscaledTime - quietSince >= 0.3f) break; // 持续安静才认定播完
+                }
+                else
+                {
+                    quietSince = -1f;
+                }
+                yield return new WaitForSeconds(0.05f);
+            }
+            if (State == VoiceAIState.Speaking) SetState(VoiceAIState.Idle);
+        }
+
+        /// <summary>系统TTS播完回调：个别机型会在开播时误触发，确认真正安静后才复位</summary>
+        private void OnSystemTtsUtteranceEnd()
+        {
+            StartCoroutine(VerifySystemTtsQuietThenIdle());
+        }
+
+        private IEnumerator VerifySystemTtsQuietThenIdle()
+        {
+            yield return new WaitForSeconds(0.3f);
+            if (_tts != null && _tts.IsSpeaking()) yield break; // 仍在出声 → 误报，忽略
             if (State == VoiceAIState.Speaking) SetState(VoiceAIState.Idle);
         }
 
@@ -1114,6 +1283,13 @@ namespace VoiceAI
 
         private void Update()
         {
+            // 数字人动画兜底：状态已离开说话态且语音彻底安静后，定格到第0帧（闭嘴姿态）
+            if (_dhAnim != null && State != VoiceAIState.Speaking
+                && !IsTtsAudiblyPlaying() && _dhAnim[speakAnimName].speed != 0f)
+            {
+                DhFreezeAtFrame0();
+            }
+
             // 回答态（云端TTS）：采样正在播放的音频音量，实时喂给边缘流光
             // （系统TTS 无 AudioSource 可读，由光效内置的音节节律模拟兜底）
             if (State == VoiceAIState.Speaking && _glow != null && useCloudTts &&
@@ -1148,6 +1324,7 @@ namespace VoiceAI
             State = state;
             OnStateChanged?.Invoke(state);
             if (_glow != null) _glow.SetState((int)state); // 边缘流光随状态切换
+            UpdateDigitalHumanAnim(state);                 // 数字人说话动画随状态切换
             UpdateStatusText();
             UpdateWakeListening();
         }

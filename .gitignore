@@ -109,3 +109,7 @@ InitTestScene*.unity*
 # Unity crash recovery files
 /[Aa]ssets/_Recovery/
 /[Aa]ssets/_Recovery.meta
+
+# ZCode workspace & local crash log
+.zcode/
+crash_err.txt

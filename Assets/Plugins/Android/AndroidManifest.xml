@@ -3,7 +3,12 @@
   Unity 构建 Android 时会把这份清单作为 Main Manifest 合并进最终 APK。
   需要的权限：
   - INTERNET      ：访问 DeepSeek API
-  - RECORD_AUDIO  ：系统语音识别（SpeechRecognizer）录音需要
+  - RECORD_AUDIO  ：语音识别录音
+  - RECEIVE_BOOT_COMPLETED：开机自启动（BootReceiver）
+  - FOREGROUND_SERVICE(_SPECIAL_USE)：看门狗前台服务（Android 10+ 必需）
+  - POST_NOTIFICATIONS：看门狗常驻通知可见（Android 13+，未授予也不影响服务运行）
+  - SYSTEM_ALERT_WINDOW：Android 10+ 允许看门狗从后台拉起 Activity
+    （需用 adb 授予：adb shell appops set <包名> SYSTEM_ALERT_WINDOW allow）
   <queries>       ：Android 11+ 包可见性，让系统能发现语音识别服务与 TTS 引擎
 
   ⚠ 重要：Unity 6.0.3 在自定义 Main Manifest 下可能不会自动注入启动 Activity，
@@ -12,6 +17,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <queries>
         <intent>
@@ -34,5 +44,39 @@
             </intent-filter>
             <meta-data android:name="unityplayer.UnityActivity" android:value="true" />
         </activity>
+
+        <!-- 开机 / APK 更新后自动拉起应用并启动看门狗 -->
+        <receiver
+            android:name="com.parasiticwasps.voiceai.kiosk.BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 崩溃测试：am broadcast -a com.parasiticwasps.voiceai.CRASH_TEST 杀死主进程验证看门狗 -->
+        <receiver
+            android:name="com.parasiticwasps.voiceai.kiosk.CrashTestReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.parasiticwasps.voiceai.CRASH_TEST" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 崩溃看门狗：独立进程，主进程死亡后自动重新拉起 -->
+        <service
+            android:name="com.parasiticwasps.voiceai.kiosk.WatchdogService"
+            android:enabled="true"
+            android:exported="false"
+            android:process=":watchdog"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Kiosk watchdog keeps the voice assistant alive" />
+        </service>
     </application>
 </manifest>
