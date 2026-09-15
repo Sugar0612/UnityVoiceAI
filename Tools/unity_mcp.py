@@ -13,11 +13,9 @@ def post(payload, sid=None):
     with urllib.request.urlopen(req, timeout=180) as r:
         body = r.read().decode()
         out_sid = r.headers.get("mcp-session-id")
-    # body may be SSE (event-stream); extract data line(s)
-    if body.lstrip().startswith("event:"):
-        data = "".join(l[5:].strip() + "\n" for l in body.splitlines() if l.startswith("data:"))
-    else:
-        data = body
+    # SSE streams may contain ": ping" comments before data lines — always extract data:
+    data_lines = [l[5:].strip() for l in body.splitlines() if l.startswith("data:")]
+    data = "\n".join(data_lines) if data_lines else body
     return out_sid, data
 
 def call_tool(name, args):
@@ -32,7 +30,11 @@ def call_tool(name, args):
 if __name__ == "__main__":
     tool = sys.argv[1]
     args = json.loads(sys.argv[2]) if len(sys.argv) > 2 else {}
-    out = call_tool(tool, args)
+    try:
+        out = call_tool(tool, args)
+    except Exception as e:
+        print("CALL_ERROR:", e)
+        sys.exit(1)
     sc = out.get("result", {}).get("structuredContent")
     if sc is not None:
         print(json.dumps(sc, ensure_ascii=False)[:4000])

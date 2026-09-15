@@ -63,11 +63,19 @@ echo ===== 3/5 授权与白名单（部分系统会拒绝，失败不影响使�
 "%ADB%" %SERIALARG% shell dumpsys deviceidle whitelist +%PKG% >nul 2>&1
 echo 完成。
 
-echo ===== 4/5 启动应用 =====
+echo ===== 4/5 设为默认桌面（开机直达应用的关键）=====
+"%ADB%" %SERIALARG% shell cmd package set-home-activity %PKG%/com.unity3d.player.UnityPlayerActivity >nul 2>&1
+if errorlevel 1 (
+    "%ADB%" %SERIALARG% shell cmd role add-role-holder android.app.role.HOME %PKG% >nul 2>&1
+)
+echo 完成。开机后系统将直接启动本应用。
+
+echo ===== 5/5 启动应用并调大音量 =====
 "%ADB%" %SERIALARG% shell monkey -p %PKG% -c android.intent.category.LAUNCHER 1 >nul 2>&1
 ping -n 6 127.0.0.1 >nul
+for /l %%i in (1,1,15) do "%ADB%" %SERIALARG% shell input keyevent 24 >nul 2>&1
 
-echo ===== 5/5 验证进程 =====
+echo ===== 验证进程 =====
 "%ADB%" %SERIALARG% shell ps -A | findstr /c:"%PKG%"
 if errorlevel 1 (
     echo [警告] 未检测到应用进程，请检查设备画面。

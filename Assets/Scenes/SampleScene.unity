@@ -152,7 +152,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::VoiceAI.VoiceAIController
   deepSeek:
-    apiKey: 
+    apiKey: sk-d0ee5c03c32a4b9f98cfb4a2f4ab402c
     apiUrl: https://api.deepseek.com/chat/completions
     model: deepseek-chat
     maxTokens: 1024
@@ -184,7 +184,7 @@ MonoBehaviour:
     iflyAccent: mandarin
     iflyEngineType: 16k_zh
     iflyDomain: iat
-  useCloudTts: 0
+  useCloudTts: 1
   tts:
     apiUrl: https://api.minimax.chat/v1/t2a_v2
     apiKey: sk-api-WJkj46IN-2LzqS8Qaw2m4KJBoGayaukFDHnIT8vUlgmHg8XeNbCb6Wwe95BtbGQ0IUpWDlLx0Ia2P6HpJU6yyIIlJGb9NXjN2YpLtR4Y9hvFwJodlE3iQas
@@ -208,7 +208,7 @@ MonoBehaviour:
   maxRecordSeconds: 25
   speechStartRms: 0.025
   noSpeechTimeoutSeconds: 12
-  preferSystemStt: 1
+  preferSystemStt: 0
   digitalHuman: {fileID: 933484658}
   speakAnimName: Take 001
   hideTalkButton: 1

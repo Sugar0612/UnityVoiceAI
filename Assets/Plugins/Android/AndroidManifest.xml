@@ -14,7 +14,8 @@
   ⚠ 重要：Unity 6.0.3 在自定义 Main Manifest 下可能不会自动注入启动 Activity，
   这里显式声明 UnityPlayerActivity + MAIN/LAUNCHER，保证 APK 有桌面图标和启动入口。
 -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -35,12 +36,19 @@
     <application>
         <activity
             android:name="com.unity3d.player.UnityPlayerActivity"
+            tools:node="replace"
             android:exported="true"
             android:theme="@style/UnityThemeSelector"
+            android:launchMode="singleTask"
+            android:stateNotNeeded="true"
             android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|smallestScreenSize|fontScale|layoutDirection|density">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+                <!-- Kiosk：本应用同时作为桌面（HOME），系统开机必定启动桌面，
+                     绕开部分定制ROM（如 rockchip n301）禁止第三方应用接收开机广播的限制 -->
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
             <meta-data android:name="unityplayer.UnityActivity" android:value="true" />
         </activity>
