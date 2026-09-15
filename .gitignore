@@ -113,3 +113,6 @@ InitTestScene*.unity*
 # ZCode workspace & local crash log
 .zcode/
 crash_err.txt
+
+# 本地部署打包产物（APK可由命令行构建重新生成）
+Deploy/
