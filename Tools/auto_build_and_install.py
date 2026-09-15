@@ -27,21 +27,60 @@ def log(msg):
         f.write(line + '\n')
     print(line, flush=True)
 
+import urllib.request, urllib.error
+_MCP_URL = 'http://127.0.0.1:8083/mcp'
+
 def mcp(tool, args):
     try:
-        r = subprocess.run([sys.executable, os.path.join(PROJECT, 'Tools', 'unity_mcp.py'),
-                            tool, json.dumps(args)], capture_output=True, text=True,
-                           timeout=900, encoding='utf-8', errors='replace')
-        return r.stdout or ''
+        req = urllib.request.Request(_MCP_URL, data=json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+             "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                        "clientInfo": {"name": "w", "version": "1"}}}).encode(),
+            headers={"Content-Type": "application/json",
+                     "Accept": "application/json, text/event-stream"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            sid = r.headers.get("mcp-session-id")
+            r.read()
+        req2 = urllib.request.Request(_MCP_URL, data=json.dumps(
+            {"jsonrpc": "2.0", "method": "notifications/initialized"}).encode(),
+            headers={"Content-Type": "application/json",
+                     "Accept": "application/json, text/event-stream",
+                     "mcp-session-id": sid or ""})
+        urllib.request.urlopen(req2, timeout=30).read()
+        req3 = urllib.request.Request(_MCP_URL, data=json.dumps(
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+             "params": {"name": tool, "arguments": args}}).encode(),
+            headers={"Content-Type": "application/json",
+                     "Accept": "application/json, text/event-stream",
+                     "mcp-session-id": sid or ""})
+        with urllib.request.urlopen(req3, timeout=880) as r:
+            body = r.read().decode('utf-8', 'replace')
+        lines = [l[5:].strip() for l in body.splitlines() if l.startswith('data:')]
+        return chr(10).join(lines) if lines else body
     except Exception as e:
         return 'EXC:' + str(e)
 
+def run_cmd(cmd, timeout=600):
+    """bytes 模式 + 重试：规避本机 subprocess 管道线程偶发崩溃"""
+    last = ''
+    for _ in range(3):
+        try:
+            r = subprocess.run(cmd, capture_output=True, timeout=timeout)
+            out = (r.stdout or b'') + b'\n' + (r.stderr or b'')
+            return out.decode('utf-8', 'replace')
+        except IndexError:
+            time.sleep(2)
+        except subprocess.TimeoutExpired:
+            return 'TIMEOUT'
+        except Exception as e:
+            return 'EXC:' + str(e)
+    return 'PIPE_FAIL: ' + last
+
 def adb(*args):
-    return subprocess.run(['adb'] + list(args), capture_output=True, text=True,
-                          timeout=600, encoding='utf-8', errors='replace')
+    return run_cmd(['adb'] + list(args))
 
 def unity_running():
-    return 'unity.exe' in subprocess.run(['tasklist'], capture_output=True, text=True).stdout.lower()
+    return 'unity.exe' in run_cmd(['tasklist']).lower()
 
 def build_via_mcp():
     mcp('execute_code', {'action': 'execute', 'code': KEY_CODE})
@@ -90,7 +129,7 @@ def deploy():
     time.sleep(2)
     adb('shell', 'monkey', '-p', PKG, '-c', 'android.intent.category.LAUNCHER', '1')
     time.sleep(8)
-    ps = adb('shell', 'ps -A').stdout
+    ps = adb('shell', 'ps -A')
     procs = [l.split()[1] for l in ps.splitlines() if PKG in l]
     log('processes: ' + ', '.join(procs))
     return PKG in ps

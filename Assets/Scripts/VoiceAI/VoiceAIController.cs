@@ -93,6 +93,10 @@ namespace VoiceAI
         [Tooltip("AI 开始说话时循环播放的动画名（Legacy Animation）")]
         [SerializeField] private string speakAnimName = "Take 001";
 
+        [Header("边缘流光特效")]
+        [Tooltip("false=关闭边缘流光（低端设备上全屏重绘+Bloom后处理开销大、导致卡顿）")]
+        [SerializeField] private bool enableEdgeGlow = false;
+
         [Header("交互开关")]
         [Tooltip("true=隐藏\"点击说话\"按钮（唤醒词免按键模式下无需按钮）")]
         [SerializeField] private bool hideTalkButton = true;
@@ -605,10 +609,18 @@ namespace VoiceAI
         /// <summary>挂载唤醒词检测器与边缘光效（运行时自动创建，无需手动配置）</summary>
         private void InitWakeWordAndGlow()
         {
-            var canvas = GetComponentInChildren<Canvas>(true);
-            if (canvas == null) canvas = UnityEngine.Object.FindFirstObjectByType<Canvas>();
-            _glow = EdgeGlowEffect.AttachToCanvas(canvas);
-            if (_glow != null) _glow.SetState((int)State);
+            // 边缘流光默认关闭：全屏 RawImage 逐帧重绘 + Bloom 后处理在低端设备上会明显掉帧
+            if (!enableEdgeGlow)
+            {
+                _glow = null;
+            }
+            else
+            {
+                var canvas = GetComponentInChildren<Canvas>(true);
+                if (canvas == null) canvas = UnityEngine.Object.FindFirstObjectByType<Canvas>();
+                _glow = EdgeGlowEffect.AttachToCanvas(canvas);
+                if (_glow != null) _glow.SetState((int)State);
+            }
 
             _wake = GetComponent<WakeWordDetector>();
             if (_wake == null) _wake = gameObject.AddComponent<WakeWordDetector>();
