@@ -37,6 +37,8 @@ namespace VoiceAI
         [SerializeField] private SttSettings sttFallback = null;
 
         [Header("语音合成(TTS) 配置")]
+        [Tooltip("true=免费女声（优先 Edge 晓晓，失败自动降级讯飞小燕，均无需额外付费账号）；false=用MiniMax（可自定义/复刻音色，按字符收费）")]
+        [SerializeField] private bool useFreeTts = true;
         [Tooltip("true=用云端TTS(MiniMax，可自定义音色)；false=用系统TTS(免费)")]
         [SerializeField] private bool useCloudTts = false;
         [SerializeField] private TtsSettings tts = new TtsSettings();
@@ -213,6 +215,7 @@ namespace VoiceAI
 
 #if UNITY_ANDROID && !UNITY_EDITOR
             StartKioskWatchdog();
+            StartCoroutine(PreSynthFreeAck()); // 免费女声自检 + 预缓存唤醒应答
 #endif
         }
 
@@ -434,11 +437,12 @@ namespace VoiceAI
             return long.TryParse(s, out long v) ? v : 0;
         }
 
-        /// <summary>静默保活：距上次合成超过阈值时，合成一个极短文本刷新 MiniMax 的 7 天计时</summary>
+        /// <summary>静默保活：距上次合成超过阈值时，合成一个极短文本刷新 MiniMax 的 7 天计时（Edge 免费模式无需保活）</summary>
         private IEnumerator TryKeepAlive()
         {
 #if UNITY_ANDROID && !UNITY_EDITOR
             yield return null; // 等一帧，让 TTS 配置就绪
+            if (useFreeTts) yield break; // 免费TTS无声音过期问题，无需保活
             if (!useCloudTts || !autoKeepAlive) yield break;
             if (string.IsNullOrWhiteSpace(tts.voiceId)) yield break;
 
@@ -665,12 +669,12 @@ namespace VoiceAI
             {
                 if (_audioSource == null) { AckFallbackToListen(); yield break; }
 
-                // 应答语固定，合成一次后缓存复用
+                // 应答语固定，合成一次后缓存复用（Edge 免费女声 / MiniMax 按开关路由）
                 if (_wakeAckClip == null)
                 {
                     bool failed = false;
-                    yield return CloudTtsClient.Synthesize(tts, wakeAckText,
-                        clip => { SaveTtsTime(); _wakeAckClip = clip; },
+                    yield return SynthTts(wakeAckText,
+                        clip => _wakeAckClip = clip,
                         err => { failed = true; Debug.LogWarning("[VoiceAI] 唤醒应答合成失败，直接录音: " + err); });
                     if (failed) { AckFallbackToListen(); yield break; }
                 }
@@ -1156,9 +1160,34 @@ namespace VoiceAI
             SetState(VoiceAIState.Idle);
         }
 
+        /// <summary>免费TTS统一入口：优先 Edge 晓晓女声，失败自动降级讯飞小燕女声</summary>
+        private IEnumerator SynthTts(string text, Action<AudioClip> onOk, Action<string> onErr)
+        {
+            if (useFreeTts)
+            {
+                string edgeErr = null;
+                AudioClip edgeClip = null;
+                yield return EdgeTtsClient.Synthesize(text, "", c => edgeClip = c, e => edgeErr = e);
+                if (edgeClip != null)
+                {
+                    onOk(edgeClip);
+                    yield break;
+                }
+                Debug.LogWarning("[VoiceAI] Edge TTS 失败(" + edgeErr + ")，降级讯飞小燕女声");
+            }
+            yield return IflytekTtsClient.Synthesize(stt, text, onOk, onErr);
+        }
+
         private void Speak(string text)
         {
-            // 方案一（默认）：云端 TTS（MiniMax 声音复刻，可自定义音色）
+            // 方案零：免费女声（Edge 晓晓，失败自动降级讯飞小燕）
+            if (useCloudTts && useFreeTts)
+            {
+                StartCoroutine(SpeakFree(text));
+                return;
+            }
+
+            // 方案一：云端 TTS（MiniMax 声音复刻，可自定义音色，按字符收费）
             if (useCloudTts)
             {
                 if (_audioSource == null)
@@ -1215,6 +1244,44 @@ namespace VoiceAI
             Debug.LogWarning("[VoiceAI] 编辑器模式下系统TTS不可用，请改用云端TTS（useCloudTts=true）");
             SetState(VoiceAIState.Idle);
 #endif
+        }
+
+        /// <summary>Edge 免费女声朗读：合成 → 播放 → 等播完复位</summary>
+        private IEnumerator SpeakFree(string text)
+        {
+            if (_audioSource == null)
+            {
+                RaiseError("AudioSource 不可用");
+                SetState(VoiceAIState.Idle);
+                yield break;
+            }
+            SetText(statusText, "正在合成语音...");
+            AudioClip clip = null;
+            string err = null;
+            yield return SynthTts(text, c => clip = c, e => err = e);
+            if (err != null || clip == null)
+            {
+                RaiseError("语音合成失败: " + (err ?? "无音频"));
+                SetState(VoiceAIState.Idle);
+                yield break;
+            }
+            if (State != VoiceAIState.Speaking) yield break; // 期间已被打断
+            _audioSource.clip = clip;
+            _audioSource.Play();
+            SetText(statusText, "正在朗读回复...");
+            StartCoroutine(WaitPlaybackEnd());
+        }
+
+        /// <summary>启动时预合成唤醒应答（Edge 模式）：既当自检，也把"我在"缓存好，首次唤醒秒出声</summary>
+        private IEnumerator PreSynthFreeAck()
+        {
+            if (!useFreeTts || !useCloudTts || string.IsNullOrEmpty(wakeAckText) || _wakeAckClip != null)
+                yield break;
+            yield return SynthTts(wakeAckText, clip =>
+            {
+                _wakeAckClip = clip;
+                Debug.Log("[VoiceAI] 免费女声就绪（Edge TTS 预合成成功，已缓存唤醒应答）");
+            }, err => Debug.LogWarning("[VoiceAI] Edge TTS 预合成失败（不影响其他功能）: " + err));
         }
 
         /// <summary>等待云端 TTS 音频播放完毕，然后复位状态</summary>
